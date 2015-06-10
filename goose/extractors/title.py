@@ -76,7 +76,7 @@ class TitleExtractor(BaseExtractor):
         Fetch the article title and analyze it
         """
         title = ''
-
+        print("Fetching title..")
         # rely on opengraph in case we have the data
         if "title" in self.article.opengraph.keys():
             title = self.article.opengraph['title']
@@ -91,6 +91,16 @@ class TitleExtractor(BaseExtractor):
         if meta_headline is not None and len(meta_headline) > 0:
             title = self.parser.getAttribute(meta_headline[0], 'content')
             return self.clean_title(title)
+
+        # try to fetch class (AP)
+        class_headline = self.parser.getElementsByTag(self.article.doc,
+                                                      attr="class",
+                                                      value="headline")
+
+        if class_headline is not None and len(class_headline) > 0:
+            title = class_headline[0].text
+            return self.clean_title(title)
+
 
         # otherwise use the title meta
         title_element = self.parser.getElementsByTag(self.article.doc, tag='title')
