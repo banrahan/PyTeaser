@@ -25,11 +25,20 @@ import glob
 from copy import deepcopy
 from goose.article import Article
 from goose.utils import URLHelper, RawHelper
-from goose.extractors import StandardContentExtractor
+from goose.extractors.content import StandardContentExtractor
+from goose.extractors.videos import VideoExtractor
+from goose.extractors.title import TitleExtractor
+from goose.extractors.images import ImageExtractor
+from goose.extractors.links import LinksExtractor
+from goose.extractors.tweets import TweetsExtractor
+from goose.extractors.authors import AuthorsExtractor
+from goose.extractors.tags import TagsExtractor
+from goose.extractors.opengraph import OpenGraphExtractor
+from goose.extractors.publishdate import PublishDateExtractor
+from goose.extractors.metas import MetasExtractor
 from goose.cleaners import StandardDocumentCleaner
 from goose.outputformatters import StandardOutputFormatter
-from goose.images.extractors import UpgradedImageIExtractor
-from goose.videos.extractors import VideoExtractor
+
 from goose.network import HtmlFetcher
 
 
@@ -46,100 +55,215 @@ class CrawlCandidate(object):
 class Crawler(object):
 
     def __init__(self, config):
+        # config
         self.config = config
         # parser
         self.parser = self.config.get_parser()
+
+        # article
+        self.article = Article()
+
+        # init the extractor
+        self.extractor = self.get_extractor()
+
+        # init the document cleaner
+        self.cleaner = self.get_cleaner()
+
+        # init the output formatter
+        self.formatter = self.get_formatter()
+
+        # metas extractor
+        self.metas_extractor = self.get_metas_extractor()
+
+        # publishdate extractor
+        self.publishdate_extractor = self.get_publishdate_extractor()
+
+        # opengraph extractor
+        self.opengraph_extractor = self.get_opengraph_extractor()
+
+        # tags extractor
+        self.tags_extractor = self.get_tags_extractor()
+
+        # authors extractor
+        self.authors_extractor = self.get_authors_extractor()
+
+        # tweets extractor
+        self.tweets_extractor = self.get_tweets_extractor()
+
+        # links extractor
+        self.links_extractor = self.get_links_extractor()
+
+        # video extractor
+        self.video_extractor = self.get_video_extractor()
+
+        # title extractor
+        self.title_extractor = self.get_title_extractor()
+
+        # image extrator
+        self.image_extractor = self.get_image_extractor()
+
+        # html fetcher
+        self.htmlfetcher = HtmlFetcher(self.config)
+
+        # TODO : log prefix
         self.logPrefix = "crawler:"
 
     def crawl(self, crawl_candidate):
-        article = Article()
 
+        # parser candidate
         parse_candidate = self.get_parse_candidate(crawl_candidate)
+
+        # raw html
         raw_html = self.get_html(crawl_candidate, parse_candidate)
 
         if raw_html is None:
-            return article
+            return self.article
 
+        # create document
         doc = self.get_document(raw_html)
 
-        extractor = self.get_extractor()
-        document_cleaner = self.get_document_cleaner()
-        output_formatter = self.get_output_formatter()
-
         # article
-        article.final_url = parse_candidate.url
-        article.link_hash = parse_candidate.link_hash
-        article.raw_html = raw_html
-        article.doc = doc
-        article.raw_doc = deepcopy(doc)
-        article.title = extractor.get_title(article)
-        # TODO
-        # article.publish_date = config.publishDateExtractor.extract(doc)
-        # article.additional_data = config.get_additionaldata_extractor.extract(doc)
-        article.meta_lang = extractor.get_meta_lang(article)
-        article.meta_favicon = extractor.get_favicon(article)
-        article.meta_description = extractor.get_meta_description(article)
-        article.meta_keywords = extractor.get_meta_keywords(article)
-        article.canonical_link = extractor.get_canonical_link(article)
-        article.domain = extractor.get_domain(article.final_url)
-        article.tags = extractor.extract_tags(article)
-        # # before we do any calcs on the body itself let's clean up the document
-        article.doc = document_cleaner.clean(article)
+        self.article.final_url = parse_candidate.url
+        self.article.link_hash = parse_candidate.link_hash
+        self.article.raw_html = raw_html
+        self.article.doc = doc
+        self.article.raw_doc = deepcopy(doc)
+
+        # open graph
+        self.article.opengraph = self.opengraph_extractor.extract()
+
+        # publishdate
+        self.article.publish_date = self.publishdate_extractor.extract()
+
+        # meta
+        metas = self.metas_extractor.extract()
+        self.article.meta_lang = metas['lang']
+        self.article.meta_favicon = metas['favicon']
+        self.article.meta_description = metas['description']
+        self.article.meta_keywords = metas['keywords']
+        self.article.canonical_link = metas['canonical']
+        self.article.domain = metas['domain']
+
+        # tags
+        self.article.tags = self.tags_extractor.extract()
+
+        # authors
+        self.article.authors = self.authors_extractor.extract()
+
+        # title
+        self.article.title = self.title_extractor.extract()
+
+        # check for known node as content body
+        # if we find one force the article.doc to be the found node
+        # this will prevent the cleaner to remove unwanted text content
+        article_body = self.extractor.get_known_article_tags()
+        if article_body is not None:
+            self.article.doc = article_body
+
+        # before we do any calcs on the body itself let's clean up the document
+        self.article.doc = self.cleaner.clean()
 
         # big stuff
-        article.top_node = extractor.calculate_best_node(article)
-        if article.top_node is not None:
-            # video handeling
-            video_extractor = self.get_video_extractor(article)
-            video_extractor.get_videos()
-            # image handeling
+        self.article.top_node = self.extractor.calculate_best_node()
+
+        # if we have a top node
+        # let's process it
+        if self.article.top_node is not None:
+
+            # article links
+            self.article.links = self.links_extractor.extract()
+
+            # tweets
+            self.article.tweets = self.tweets_extractor.extract()
+
+            # video handling
+            self.video_extractor.get_videos()
+
+            # image handling
             if self.config.enable_image_fetching:
-                image_extractor = self.get_image_extractor(article)
-                article.top_image = image_extractor.get_best_image(article.raw_doc, article.top_node)
+                self.get_image()
+
             # post cleanup
-            article.top_node = extractor.post_cleanup(article.top_node)
+            self.article.top_node = self.extractor.post_cleanup()
+
             # clean_text
-            article.cleaned_text = output_formatter.get_formatted_text(article)
+            self.article.cleaned_text = self.formatter.get_formatted_text()
 
         # cleanup tmp file
-        self.relase_resources(article)
+        self.relase_resources()
 
-        return article
+        # return the article
+        return self.article
 
     def get_parse_candidate(self, crawl_candidate):
         if crawl_candidate.raw_html:
             return RawHelper.get_parsing_candidate(crawl_candidate.url, crawl_candidate.raw_html)
         return URLHelper.get_parsing_candidate(crawl_candidate.url)
 
+    def get_image(self):
+        doc = self.article.raw_doc
+        top_node = self.article.top_node
+        self.article.top_image = self.image_extractor.get_best_image(doc, top_node)
+
     def get_html(self, crawl_candidate, parsing_candidate):
+        # we got a raw_tml
+        # no need to fetch remote content
         if crawl_candidate.raw_html:
             return crawl_candidate.raw_html
+
         # fetch HTML
-        html = HtmlFetcher().get_html(self.config, parsing_candidate.url)
+        html = self.htmlfetcher.get_html(parsing_candidate.url)
+        self.article.additional_data.update({
+            'request': self.htmlfetcher.request,
+            'result': self.htmlfetcher.result,
+            })
         return html
 
-    def get_image_extractor(self, article):
-        http_client = None
-        return UpgradedImageIExtractor(http_client, article, self.config)
+    def get_metas_extractor(self):
+        return MetasExtractor(self.config, self.article)
 
-    def get_video_extractor(self, article):
-        return VideoExtractor(article, self.config)
+    def get_publishdate_extractor(self):
+        return PublishDateExtractor(self.config, self.article)
 
-    def get_output_formatter(self):
-        return StandardOutputFormatter(self.config)
+    def get_opengraph_extractor(self):
+        return OpenGraphExtractor(self.config, self.article)
 
-    def get_document_cleaner(self):
-        return StandardDocumentCleaner(self.config)
+    def get_tags_extractor(self):
+        return TagsExtractor(self.config, self.article)
+
+    def get_authors_extractor(self):
+        return AuthorsExtractor(self.config, self.article)
+
+    def get_tweets_extractor(self):
+        return TweetsExtractor(self.config, self.article)
+
+    def get_links_extractor(self):
+        return LinksExtractor(self.config, self.article)
+
+    def get_title_extractor(self):
+        return TitleExtractor(self.config, self.article)
+
+    def get_image_extractor(self):
+        return ImageExtractor(self.config, self.article)
+
+    def get_video_extractor(self):
+        return VideoExtractor(self.config, self.article)
+
+    def get_formatter(self):
+        return StandardOutputFormatter(self.config, self.article)
+
+    def get_cleaner(self):
+        return StandardDocumentCleaner(self.config, self.article)
 
     def get_document(self, raw_html):
         doc = self.parser.fromstring(raw_html)
         return doc
 
     def get_extractor(self):
-        return StandardContentExtractor(self.config)
+        return StandardContentExtractor(self.config, self.article)
 
-    def relase_resources(self, article):
-        path = os.path.join(self.config.local_storage_path, '%s_*' % article.link_hash)
+    def relase_resources(self):
+        path = os.path.join(self.config.local_storage_path, '%s_*' % self.article.link_hash)
         for fname in glob.glob(path):
             try:
                 os.remove(fname)

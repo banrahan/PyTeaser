@@ -20,34 +20,42 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-import urllib2
-import cookielib
+import six
+
+try:
+    from urllib2 import urlopen, Request
+except ImportError:
+    from urllib.request import urlopen, Request
+
 
 class HtmlFetcher(object):
 
-    def __init__(self):
-        pass
+    def __init__(self, config):
+        self.config = config
+        # set header
+        self.headers = {'User-agent': self.config.browser_user_agent}
 
-    def get_http_client(self):
-        pass
+    def get_url(self):
+        # if we have a result
+        # get the final_url
+        if self.result is not None:
+            return self.result.geturl()
+        return None
 
-    def get_html(self, config, url):
-        """\
-
-        """
-        if isinstance(url, unicode):
+    def get_html(self, url):
+        # utf-8 encode unicode url
+        if isinstance(url, six.text_type) and six.PY2:
             url = url.encode('utf-8')
-        
-        cookiejar = cookielib.LWPCookieJar()
-        opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
-        urllib2.install_opener(opener)
 
-        headers = {'User-agent': config.browser_user_agent}
-        request = urllib2.Request(url, headers=headers)
-
+        # set request
+        self.request = Request(url, headers=self.headers)
+        # do request
         try:
-            result = urllib2.urlopen(request).read()
-        except:
-            return None
+            self.result = urlopen(self.request, timeout=self.config.http_timeout)
+        except Exception:
+            self.result = None
 
-        return result
+        # read the result content
+        if self.result is not None:
+            return self.result.read()
+        return None

@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 """\
-
-12-14-2013: Removed the StopWordsArabic class in order to remove nltk dependency for PyTeaser 
-
 This is a python port of "Goose" orignialy licensed to Gravity.com
 under one or more contributor license agreements.  See the NOTICE file
 distributed with this work for additional information
@@ -26,14 +23,53 @@ limitations under the License.
 import os
 import re
 import string
+
+import six
+
 from goose.utils import FileHelper
 from goose.utils.encoding import smart_unicode
 from goose.utils.encoding import smart_str
 from goose.utils.encoding import DjangoUnicodeDecodeError
+
 TABSSPACE = re.compile(r'[\s\t]+')
 
+
+def get_encodings_from_content(content):
+    """
+    Code from:
+    https://github.com/sigmavirus24/requests-toolbelt/blob/master/requests_toolbelt/utils/deprecated.py
+    Return encodings from given content string.
+    :param content: string to extract encodings from.
+    """
+    if isinstance(content, six.binary_type) and six.PY3:
+        find_charset = re.compile(
+            br'<meta.*?charset=["\']*(.+?)["\'>]', flags=re.I
+        ).findall
+
+        find_pragma = re.compile(
+            br'<meta.*?content=["\']*;?charset=(.+?)["\'>]', flags=re.I
+        ).findall
+
+        find_xml = re.compile(
+            br'^<\?xml.*?encoding=["\']*(.+?)["\'>]'
+        ).findall
+    else:
+        find_charset = re.compile(
+            r'<meta.*?charset=["\']*(.+?)["\'>]', flags=re.I
+        ).findall
+
+        find_pragma = re.compile(
+            r'<meta.*?content=["\']*;?charset=(.+?)["\'>]', flags=re.I
+        ).findall
+
+        find_xml = re.compile(
+            r'^<\?xml.*?encoding=["\']*(.+?)["\'>]'
+        ).findall
+    return find_charset(content) + find_pragma(content) + find_xml(content)
+
+
 def innerTrim(value):
-    if isinstance(value, (unicode, str)):
+    if isinstance(value, (six.text_type, six.string_types)):
         # remove tab and white space
         value = re.sub(TABSSPACE, ' ', value)
         value = ''.join(value.splitlines())
@@ -47,7 +83,7 @@ def encodeValue(value):
         value = smart_unicode(value)
     except (UnicodeEncodeError, DjangoUnicodeDecodeError):
         value = smart_str(value)
-    except:
+    except Exception:
         value = string_org
     return value
 
@@ -88,7 +124,6 @@ class WordStats(object):
 class StopWords(object):
 
     PUNCTUATION = re.compile("[^\\p{Ll}\\p{Lu}\\p{Lt}\\p{Lo}\\p{Nd}\\p{Pc}\\s]")
-    TRANS_TABLE = string.maketrans('', '')
     _cached_stop_words = {}
 
     def __init__(self, language='en'):
@@ -96,15 +131,21 @@ class StopWords(object):
         # to generate dynamic path for file to load
         if not language in self._cached_stop_words:
             path = os.path.join('text', 'stopwords-%s.txt' % language)
-            self._cached_stop_words[language] = set(FileHelper.loadResourceFile(path).splitlines())
+            try:
+                content = FileHelper.loadResourceFile(path)
+                word_list = content.splitlines()
+            except IOError:
+                word_list = []
+            self._cached_stop_words[language] = set(word_list)
         self.STOP_WORDS = self._cached_stop_words[language]
 
     def remove_punctuation(self, content):
         # code taken form
         # http://stackoverflow.com/questions/265960/best-way-to-strip-punctuation-from-a-string-in-python
-        if isinstance(content, unicode):
-            content = content.encode('utf-8')
-        return content.translate(self.TRANS_TABLE, string.punctuation).decode('utf-8')
+        if not isinstance(content, six.text_type):
+            content = content.decode('utf-8')
+        tbl = dict.fromkeys(ord(x) for x in string.punctuation)
+        return content.translate(tbl)
 
     def candiate_words(self, stripped_input):
         return stripped_input.split(' ')
@@ -162,3 +203,29 @@ class StopWordsArabic(StopWords):
         for word in nltk.tokenize.wordpunct_tokenize(stripped_input):
             words.append(s.stem(word))
         return words
+
+
+class StopWordsKorean(StopWords):
+    """
+    Korean segmentation
+    """
+    def __init__(self, language='ko'):
+        super(StopWordsKorean, self).__init__(language='ko')
+
+    def get_stopword_count(self, content):
+        if not content:
+            return WordStats()
+        ws = WordStats()
+        stripped_input = self.remove_punctuation(content)
+        candiate_words = self.candiate_words(stripped_input)
+        overlapping_stopwords = []
+        c = 0
+        for w in candiate_words:
+            c += 1
+            for stop_word in self.STOP_WORDS:
+                overlapping_stopwords.append(stop_word)
+
+        ws.set_word_count(c)
+        ws.set_stopword_count(len(overlapping_stopwords))
+        ws.set_stop_words(overlapping_stopwords)
+        return ws

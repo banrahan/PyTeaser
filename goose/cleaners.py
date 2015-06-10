@@ -20,19 +20,30 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
+from __future__ import unicode_literals
+
 from goose.utils import ReplaceSequence
 
 
 class DocumentCleaner(object):
 
-    def __init__(self, config):
+    def __init__(self, config, article):
+        # config
         self.config = config
+
         # parser
         self.parser = self.config.get_parser()
+
+        # article
+        self.article = article
+
+        # nodes to remove regexp
         self.remove_nodes_re = (
-        "^side$|combx|retweet|mediaarticlerelated|menucontainer|navbar"
+        "^side$|combx|retweet|mediaarticlerelated|menucontainer|"
+        "navbar|storytopbar-bucket|utility-bar|inline-share-tools"
         "|comment|PopularQuestions|contact|foot|footer|Footer|footnote"
-        "|cnn_strycaptiontxt|cnn_html_slideshow|cnn_strylftcntnt|links|meta$|scroll|shoutbox|sponsor"
+        "|cnn_strycaptiontxt|cnn_html_slideshow|cnn_strylftcntnt"
+        "|^links$|meta$|shoutbox|sponsor"
         "|tags|socialnetworking|socialNetworking|cnnStryHghLght"
         "|cnn_stryspcvbx|^inset$|pagetools|post-attributes"
         "|welcome_form|contentTools2|the_answers"
@@ -57,9 +68,9 @@ class DocumentCleaner(object):
                                             .append("\t")\
                                             .append("^\\s+$")
 
-    def clean(self, article):
-
-        doc_to_clean = article.doc
+    def clean(self):
+        doc_to_clean = self.article.doc
+        doc_to_clean = self.clean_body_classes(doc_to_clean)
         doc_to_clean = self.clean_article_tags(doc_to_clean)
         doc_to_clean = self.clean_em_tags(doc_to_clean)
         doc_to_clean = self.remove_drop_caps(doc_to_clean)
@@ -75,6 +86,15 @@ class DocumentCleaner(object):
         doc_to_clean = self.div_to_para(doc_to_clean, 'div')
         doc_to_clean = self.div_to_para(doc_to_clean, 'span')
         return doc_to_clean
+
+    def clean_body_classes(self, doc):
+        # we don't need body classes
+        # in case it matches an unwanted class all the document
+        # will be empty
+        elements = self.parser.getElementsByTag(doc, tag="body")
+        if elements:
+            self.parser.delAttribute(elements[0], attr="class")
+        return doc
 
     def clean_article_tags(self, doc):
         articles = self.parser.getElementsByTag(doc, tag='article')
@@ -143,7 +163,7 @@ class DocumentCleaner(object):
         return doc
 
     def clean_para_spans(self, doc):
-        spans = self.parser.css_select(doc, 'p > span')
+        spans = self.parser.css_select(doc, 'p span')
         for item in spans:
             self.parser.drop_tag(item)
         return doc
@@ -228,7 +248,8 @@ class DocumentCleaner(object):
                 bad_divs += 1
             elif div is not None:
                 replaceNodes = self.get_replacement_nodes(doc, div)
-                div.clear()
+                for child in self.parser.childNodes(div):
+                    div.remove(child)
 
                 for c, n in enumerate(replaceNodes):
                     div.insert(c, n)
